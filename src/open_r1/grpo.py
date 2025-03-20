@@ -108,6 +108,109 @@ class GRPOScriptArguments(ScriptArguments):
             "choices": ["python", "javascript", "r", "java", "bash"],
         },
     )
+import re
+
+def format_poker_prompt(row):
+    """
+    Converts a row of poker game data into a structured decision-making prompt.
+    
+    :param row: A Pandas Series representing one row of the dataset.
+    :return: Formatted poker prompt string.
+    """
+    # Extract values from row
+    prev_line = row["prev_line"]
+    hero_pos = row["hero_pos"]
+    hero_holding = row["hero_holding"]
+    correct_decision = row["correct_decision"]
+    num_players = row["num_players"]
+    num_bets = row["num_bets"]
+    available_moves = eval(row["available_moves"])  # Convert string list to actual list
+    pot_size = row["pot_size"]
+
+    # Define player positions
+    action_flow = ["UTG", "HJ", "CO", "BTN", "SB", "BB"]
+
+    def parse_preflop_actions(preflop_raw, hero_pos):
+        """
+        Parses preflop actions while handling multiple actions per player.
+
+        :param preflop_raw: String of preflop actions (e.g., "UTG/2.0bb/BTN/7.5bb/SB/20.0bb/BB/call/UTG/fold/BTN/allin")
+        :param hero_pos: The position of the hero.
+        :return: Formatted preflop action string.
+        """
+        output = []
+        output.append("\n### **PreFLOP Actions:**")
+
+        # Split actions into a list if not empty (UTG plays)
+        actions_list = preflop_raw.split("/") if preflop_raw else []
+
+        # Dictionary to store **multiple actions per player**
+        actions_dict = {pos: [] for pos in action_flow}
+        stack_dict = {pos: 100.00 for pos in action_flow}
+
+        # Process actions sequentially
+        i = 0
+        curr_bet = 0
+        while i < len(actions_list) - 1:
+            pos = actions_list[i]
+            action = actions_list[i + 1]
+            if action.endswith('bb'):
+                num = re.findall(r"\d+\.\d+|\d+", action)  # Extract bet numbers
+                curr_bet = float(num[0])
+                stack_dict[pos] -= curr_bet
+                action = 'RAISE ' + action + " BB"
+            elif action == 'call':
+                stack_dict[pos] -= curr_bet
+            elif action == 'allin':
+                curr_bet = stack_dict[pos]
+                stack_dict[pos] -= curr_bet
+            actions_dict[pos].append(action.upper())
+            i += 2  # Move to the next action pair
+
+        active_players = set(action_flow) # Track player status
+        round_number = 1  # Track rounds
+
+        while any(actions for actions in actions_dict.values()):  # Continue while there are actions
+            current_round = []
+            for pos in action_flow:
+                if pos in active_players:
+                    actions = actions_dict[pos]
+                    
+                    if actions:
+                        current_action = actions.pop(0)
+                        current_round.append(f"{pos + '(You)'}: {current_action}" if pos == hero_pos else f"{pos}: {current_action}")
+                        if current_action == "FOLD":
+                            active_players.remove(pos)
+                    elif round_number == 1:
+                        current_action = "FOLD"
+                        current_round.append(f"{pos + '(You)'}: {current_action}" if pos == hero_pos else f"{pos}: {current_action}")
+                        active_players.remove(pos)
+            
+            output.append("\n".join(current_round)) 
+            round_number += 1
+        
+        output.append("\n### **Players' Current Stack:**")
+        output.extend(f"{pos + '(You)'}: {chip} BB" if pos == hero_pos else f"{pos}: {chip} BB" for pos, chip in stack_dict.items())
+
+        return "\n".join(output)
+
+    # Format output
+    output = []
+    output.append("You are a specialist in playing 6-handed No Limit Texas Hold'em with the positions: UTG, HJ, CO, BTN, SB, BB.")
+    output.append("The small blind is 0.5BB, and the big blind is 1BB.") 
+    output.append(f"You are seated in: {hero_pos} position.")
+    output.append(f"A new hand has begun.")
+    output.append(f"The dealer has dealt you your hole cards: [{hero_holding}].")
+
+    # Add formatted preflop actions
+    output.append(parse_preflop_actions(prev_line, hero_pos))
+
+    output.append(f"Total pot size is {pot_size} BB.")
+    output.append(f"\nYour Final Decision:")
+    #output.append(f"Based on the current situation, what is your optimal action?")
+    
+
+    return {"prompt": {"role": "user", "content": output}}
 
 
 def main(script_args, training_args, model_args):
@@ -150,6 +253,26 @@ def main(script_args, training_args, model_args):
 
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    # Format into conversation
+    def make_conversation(example):
+        prompt = []
+
+        if training_args.system_prompt is not None:
+            prompt.append({"role": "system", "content": training_args.system_prompt})
+
+        prompt.append({"role": "user", "content": example["problem"]})
+        return {"prompt": prompt}
+    print(script_args.dataset_name)
+    input("Press Enter to continue...")  # noqa: T201
+    if "poker" in script_args.dataset_name:
+        
+        dataset = dataset.map(format_poker_prompt)
+    else:
+        dataset = dataset.map(make_conversation)
+
+    for split in dataset:
+        if "messages" in dataset[split].column_names:
+            dataset[split] = dataset[split].remove_columns("messages")
 
     ################
     # Load tokenizer
@@ -179,21 +302,7 @@ def main(script_args, training_args, model_args):
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
-    # Format into conversation
-    def make_conversation(example):
-        prompt = []
 
-        if training_args.system_prompt is not None:
-            prompt.append({"role": "system", "content": training_args.system_prompt})
-
-        prompt.append({"role": "user", "content": example["problem"]})
-        return {"prompt": prompt}
-
-    dataset = dataset.map(make_conversation)
-
-    for split in dataset:
-        if "messages" in dataset[split].column_names:
-            dataset[split] = dataset[split].remove_columns("messages")
 
     logger.info("*** Initializing model kwargs ***")
     torch_dtype = (
