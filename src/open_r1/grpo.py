@@ -121,7 +121,7 @@ def format_poker_prompt(row):
     prev_line = row["prev_line"]
     hero_pos = row["hero_pos"]
     hero_holding = row["hero_holding"]
-    correct_decision = row["correct_decision"]
+    correct_decision = row["solution"]
     num_players = row["num_players"]
     num_bets = row["num_bets"]
     available_moves = eval(row["available_moves"])  # Convert string list to actual list
@@ -195,7 +195,13 @@ def format_poker_prompt(row):
         return "\n".join(output)
 
     # Format output
+    system_prompt = "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
+
+    prompt = {"prompt": []}
     output = []
+    
+    
+    prompt["prompt"].append({"role": "system", "content": system_prompt})
     output.append("You are a specialist in playing 6-handed No Limit Texas Hold'em with the positions: UTG, HJ, CO, BTN, SB, BB.")
     output.append("The small blind is 0.5BB, and the big blind is 1BB.") 
     output.append(f"You are seated in: {hero_pos} position.")
@@ -209,8 +215,12 @@ def format_poker_prompt(row):
     output.append(f"\nYour Final Decision:")
     #output.append(f"Based on the current situation, what is your optimal action?")
     
+    
+    prompt["prompt"].append({'role': 'user', 'content': " ".join(output)}) 
+    
+    #print(prompt)
 
-    return {"prompt": {"role": "user", "content": output}}
+    return prompt
 
 
 def main(script_args, training_args, model_args):
@@ -263,9 +273,7 @@ def main(script_args, training_args, model_args):
         prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
     print(script_args.dataset_name)
-    input("Press Enter to continue...")  # noqa: T201
     if "poker" in script_args.dataset_name:
-        
         dataset = dataset.map(format_poker_prompt)
     else:
         dataset = dataset.map(make_conversation)

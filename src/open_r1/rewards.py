@@ -22,6 +22,7 @@ else:
 
 
 def accuracy_reward(completions, solution, **kwargs):
+    print("accuraycy_reward args ", kwargs)
     """Reward function that checks if the completion is the same as the ground truth."""
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
